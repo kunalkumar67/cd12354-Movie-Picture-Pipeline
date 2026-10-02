@@ -1,4 +1,3 @@
-
 name: Backend Continuous Deployment
 
 on:
@@ -10,6 +9,9 @@ on:
       - ".github/workflows/backend-cd.yaml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Backend Lint
@@ -17,17 +19,22 @@ jobs:
     defaults:
       run:
         working-directory: starter/backend
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+
       - name: Install Pipenv
         run: pip install pipenv
+
       - name: Install dependencies
         run: pipenv install --dev
+
       - name: Run lint
         run: pipenv run lint
 
@@ -37,60 +44,67 @@ jobs:
     defaults:
       run:
         working-directory: starter/backend
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+
       - name: Install Pipenv
         run: pip install pipenv
+
       - name: Install dependencies
         run: pipenv install --dev
+
       - name: Run tests
         run: pipenv run test
 
   build:
     name: Build and Push Backend Image
     runs-on: ubuntu-latest
-    needs:
-      - lint
-      - test
+    needs: [lint, test]
+
+    permissions:
+      contents: read
+      packages: write
+
     env:
-      AWS_REGION: us-east-1
-      ECR_REPOSITORY: backend
+      IMAGE_NAME: ghcr.io/kunalkumar67/backend
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Login to Amazon ECR
-        id: ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build and push Docker image
+      - name: Build Backend Image
         working-directory: starter/backend
-        env:
-          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
         run: |
-          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA
+          docker build -t "$IMAGE_NAME:$GITHUB_SHA" .
+
+      - name: Push Backend Image
+        run: |
+          docker push "$IMAGE_NAME:$GITHUB_SHA"
 
   deploy:
     name: Deploy Backend to EKS
     runs-on: ubuntu-latest
     needs: build
+
     env:
       AWS_REGION: us-east-1
-      ECR_REPOSITORY: backend
       EKS_CLUSTER_NAME: cluster
+      IMAGE_NAME: ghcr.io/kunalkumar67/backend
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -100,7 +114,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
@@ -111,10 +125,13 @@ jobs:
         uses: imranismail/setup-kustomize@v2
 
       - name: Configure EKS access
-        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION"
+        run: |
+          aws eks update-kubeconfig \
+            --name "$EKS_CLUSTER_NAME" \
+            --region "$AWS_REGION"
 
       - name: Update image and deploy
         working-directory: starter/backend/k8s
         run: |
-          kustomize edit set image backend=186158723311.dkr.ecr.us-east-1.amazonaws.com/backend:$GITHUB_SHA
+          kustomize edit set image backend="$IMAGE_NAME:$GITHUB_SHA"
           kustomize build | kubectl apply -f -
