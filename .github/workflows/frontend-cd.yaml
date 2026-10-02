@@ -5,21 +5,62 @@ on:
   push:
     branches:
       - main
-    paths:
-      - "starter/frontend/**"
-      - ".github/workflows/frontend-cd.yaml"
-
   workflow_dispatch:
 
 jobs:
-  deploy:
-    name: Deploy Frontend to EKS
+  lint:
+    name: Frontend Lint
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: starter/frontend
+        run: npm ci
+
+      - name: Run lint
+        working-directory: starter/frontend
+        run: npm run lint
+
+  test:
+    name: Frontend Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: starter/frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: starter/frontend
+        run: npm ci
+
+      - name: Run tests
+        working-directory: starter/frontend
+        run: CI=true npm run test -- --watchAll=false
+
+  build:
+    name: Build and Push Frontend Image
+    needs: [lint, test]
+    runs-on: ubuntu-latest
     env:
       AWS_REGION: us-east-1
       ECR_REPOSITORY: frontend
-      EKS_CLUSTER_NAME: cluster
+      # Update this URL if your backend LoadBalancer has changed.
+      REACT_APP_MOVIE_API_URL: http://ab342b21c1ab14737ae7f9b0a272a008-748380694.us-east-1.elb.amazonaws.com
 
     steps:
       - name: Checkout code
@@ -30,7 +71,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -41,8 +82,34 @@ jobs:
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          docker build --build-arg REACT_APP_MOVIE_API_URL=http://ab342b21c1ab14737ae7f9b0a272a008-748380694.us-east-1.elb.amazonaws.com -t $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA
+          docker build \
+            --build-arg REACT_APP_MOVIE_API_URL="$REACT_APP_MOVIE_API_URL" \
+            -t "$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA" .
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
+
+  deploy:
+    name: Deploy Frontend to EKS
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: us-east-1
+      EKS_CLUSTER_NAME: cluster
+      ECR_REPOSITORY: frontend
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v4
@@ -57,6 +124,8 @@ jobs:
 
       - name: Update image and deploy
         working-directory: starter/frontend/k8s
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          kustomize edit set image frontend=${{ steps.login-ecr.outputs.registry }}/frontend:$GITHUB_SHA
+          kustomize edit set image frontend="$ECR_REGISTRY/$ECR_REPOSITORY:$GITHUB_SHA"
           kustomize build | kubectl apply -f -
