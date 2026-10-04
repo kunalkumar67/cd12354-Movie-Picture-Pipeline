@@ -5,6 +5,9 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "starter/frontend/**"
+      - ".github/workflows/frontend-cd.yaml"
   workflow_dispatch:
 
 permissions:
