@@ -16,7 +16,7 @@ permissions:
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: backend
-  ECR_REGISTRY: 186158723311.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REGISTRY: 096841258361.dkr.ecr.us-east-1.amazonaws.com
   EKS_CLUSTER_NAME: cluster
 
 jobs:
@@ -84,6 +84,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
@@ -109,6 +110,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup kubectl
